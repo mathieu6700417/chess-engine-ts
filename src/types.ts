@@ -21,7 +21,7 @@ export enum Piece {
 	W_ROOK,
 	W_QUEEN,
 	W_KING,
-	B_PAWN, 
+	B_PAWN = 9, 
 	B_KNIGHT,
 	B_BISHOP,
 	B_ROOK,
