@@ -1,7 +1,7 @@
 import { Color, Piece, PieceType, Square, Move, 
 	 makeMove, moveFrom, moveTo, moveType, movePromo, parseSquare,
 	 squareName } from './types';
-import { Bitboard, BB_ZERO, setBit } from './bitboard'
+import { Bitboard, BB_ZERO, setBit, lsb } from './bitboard'
 
 
 // Implements the FEN notation 
@@ -26,6 +26,7 @@ const CHAR_TO_PIECE: Record<string, Piece> = {
 }; 
 
 export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+export const KIWIPETE_FEN = 'r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1';
 
 export interface StateInfo {
 	castlingRights: number;  // bitmask 1=K, 2=Q, 4=k, 8=q
@@ -78,6 +79,10 @@ export class Position {
 	}
 	occupied(): Bitboard {
 		return this.byColorBB[0] | this.byColorBB[1];
+	}
+	kingSquare(color: Color): number {
+		const kingBB = this.piecesOfType(color, PieceType.KING);
+		return lsb(kingBB);
 	}
 	setFen(fen: string): void {
 		const parts = fen.split(/\s+/);
