@@ -1,6 +1,7 @@
 import { Color, Piece, PieceType, Square, Move, 
 	 makeMove, moveFrom, moveTo, moveType, movePromo, parseSquare,
 	 squareName } from './types';
+import { Bitboard, BB_ZERO, setBit } from './bitboard'
 
 
 // Implements the FEN notation 
@@ -36,6 +37,8 @@ export interface StateInfo {
 
 export class Position {
 	board: Piece[] = new Array(64).fill(Piece.NONE);
+	byTypeBB: Bitboard[] = new Array(7).fill(BB_ZERO); // Indexes by PieceType
+	byColorBB: Bitboard[] = new Array(2).fill(BB_ZERO); // INdexes by Color
 	sideToMove: Color = Color.WHITE;
 	gamePly: number = 0;
 	state: StateInfo = {
@@ -50,6 +53,31 @@ export class Position {
 	typeOf(p: Piece): PieceType {
 		if (p === Piece.NONE) return PieceType.NONE;
 		return (p >= 9 ? p - 8 : p) as PieceType;
+	}
+	private updateBitboards(): void {
+		this.byTypeBB.fill(BB_ZERO);
+		this.byColorBB.fill(BB_ZERO);
+		for (let sq = 0; sq < 64; sq++) {
+			const p = this.board[sq];
+			if (p !== Piece.NONE) {
+				const color = this.colorOf(p);
+				const type = this.typeOf(p);
+				this.byTypeBB[type] = setBit(this.byTypeBB[type], sq);
+				this.byColorBB[color] = setBit(this.byColorBB[color], sq)
+			}
+		}
+	}
+	pieces(type: PieceType): Bitboard {
+		return this.byTypeBB[type];
+	}
+	piecesOf(color: Color): Bitboard {
+		return this.byColorBB[color];
+	}
+	piecesOfType(color: Color, type: PieceType) : Bitboard {
+		return this.byColorBB[color] & this.byTypeBB[type];
+	}
+	occupied(): Bitboard {
+		return this.byColorBB[0] | this.byColorBB[1];
 	}
 	setFen(fen: string): void {
 		const parts = fen.split(/\s+/);
@@ -84,6 +112,7 @@ export class Position {
 
 		this.state.rule50 = parseInt(parts[4], 10) || 0;
 		this.gamePly = ((parseInt(parts[5], 10) || 1) - 1) * 2 + (this.sideToMove === Color.BLACK ? 1 : 0);
+		this.updateBitboards();
 	}
 
 	fen(): string {
