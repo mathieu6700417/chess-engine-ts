@@ -1,7 +1,9 @@
 import { Color, Piece, PieceType, Square, Move, 
 	 makeMove, moveFrom, moveTo, moveType, movePromo, parseSquare,
 	 squareName } from './types';
-import { Bitboard, BB_ZERO, setBit, lsb } from './bitboard'
+import { Bitboard, BB_ZERO, setBit, lsb, clearBit, squareBB, 
+	PAWN_ATTACKS, KNIGHT_ATTACKS, KING_ATTACKS, bishopAttacks, rookAttacks
+} from './bitboard'
 
 
 // Implements the FEN notation 
@@ -27,6 +29,14 @@ const CHAR_TO_PIECE: Record<string, Piece> = {
 
 export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 export const KIWIPETE_FEN = 'r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1';
+
+const CASTLING_MASK: number[] = new Array(64).fill(15)
+CASTLING_MASK[0] = ~2 & 15; // No Q-side castling for white if the rook moves from a1
+CASTLING_MASK[7] = ~1 & 15; // No K-side castling for white if the rook moves from h1
+CASTLING_MASK[4] = ~3 & 15; // No castling for white if the king moves from e1
+CASTLING_MASK[56] = ~8 & 15; // No Q-side castling for black if the rook moves from a8
+CASTLING_MASK[63] = ~4 & 15; // No K-side castling for black if the rook moves from h8
+CASTLING_MASK[60] = ~12 & 15; // No castling for black if the king moves from e8
 
 export interface StateInfo {
 	castlingRights: number;  // bitmask 1=K, 2=Q, 4=k, 8=q
@@ -167,4 +177,151 @@ export class Position {
 		return s;
 	}
 
+	doMove(m: Move): void {
+		const from = m & 0b111111;
+		const to = (m >> 6) & 0b111111;
+		const type = (m >> 12) & 0b11;
+		const promo = (m >> 14) & 0b11;
+		const us = this.sideToMove;
+		const them = 1 - us;
+		const piece = this.board[from];
+		const captured = type == 2 ? (us === Color.WHITE ? Piece.B_PAWN : Piece.W_PAWN) : this.board[to];
+		const newState: StateInfo = {
+			castlingRights: this.state.castlingRights,
+			epSquare: Square.NONE,
+			rule50: this.state.rule50 + 1,
+			captured: captured,
+			previous: this.state
+		};
+		// Cap
+		if (captured !== Piece.NONE && type !== 2) {
+			this.removePiece(to);
+		}
+		// En passant capture
+		if (type === 2) {
+			const capSq = us === Color.WHITE ? to - 8 : to + 8;
+			this.removePiece(capSq);
+		}
+		this.movePiece(from, to);
+
+		// Promotion
+		if (type === 1) {
+			this.removePiece(to);
+			const promoPiece = (us === Color.WHITE ? 0 : 8) + [ PieceType.KNIGHT, PieceType.BISHOP, PieceType.ROOK, PieceType.QUEEN ][promo];
+			this.putPiece(to, promoPiece as Piece);
+		}
+
+		// Roque 
+		if (type === 3) {
+			let rookFrom: number, rookTo: number;
+			if (to > from) {
+				rookFrom = (us === Color.WHITE ? 0 : 56) + 7;
+				rookTo = to - 1;
+			} else {
+				rookFrom = (us === Color.WHITE ? 0 : 56);
+				rookTo = to + 1;
+			}
+			this.movePiece(rookFrom, rookTo);
+		}
+
+		newState.castlingRights &= CASTLING_MASK[from] & CASTLING_MASK[to];
+
+		// Mise à jour de en passant
+		if (this.typeOf(this.board[to]) === PieceType.PAWN && 
+		    Math.abs(to - from) === 16) {
+			newState.epSquare = (from + to) / 2;
+		}
+
+		// Compteur 50 coups
+		if (this.typeOf(piece) === PieceType.PAWN || captured !== Piece.NONE) {
+			newState.rule50 = 0;
+		}
+
+
+		this.state = newState;
+		this.sideToMove = them;
+		this.gamePly++;
+	}
+
+	private putPiece(sq: number, piece: Piece): void {
+		this.board[sq] = piece;
+		const color = this.colorOf(piece);
+		const type = this.typeOf(piece);
+		this.byTypeBB[type] = setBit(this.byTypeBB[type], sq);
+		this.byColorBB[color] = setBit(this.byColorBB[color], sq);
+	}
+
+	private removePiece(sq: number): void {
+		const piece = this.board[sq];
+		const color = this.colorOf(piece);
+		const type = this.typeOf(piece);
+		this.board[sq] = Piece.NONE;
+		this.byTypeBB[type] = clearBit(this.byTypeBB[type], sq);
+		this.byColorBB[color] = clearBit(this.byColorBB[color], sq);
+	}
+
+	private movePiece(from: number, to: number): void {
+		const piece = this.board[from];
+		const color = this.colorOf(piece);
+		const type = this.typeOf(piece);
+		this.board[from] = Piece.NONE;
+		this.board[to] = piece;
+		const fromTo = squareBB(from) | squareBB(to);
+		this.byTypeBB[type] ^= fromTo;
+		this.byColorBB[color] ^= fromTo;
+	}
+
+	undoMove(m: Move): void {
+		const from = moveFrom(m);
+		const to = moveTo(m);
+		const type = moveType(m);
+		const promo = movePromo(m);
+		this.gamePly--;
+		this.sideToMove = 1 - this.sideToMove;
+		const us = this.sideToMove;
+		const captured = this.state.captured;
+		if (type === 1) {
+			// Undo promotion
+			this.removePiece(to);
+			this.putPiece(to, us === Color.WHITE ? Piece.W_PAWN : Piece.B_PAWN);
+		}
+		this.movePiece(to, from);
+		// Castling
+		if (type === 3) {
+			let rookFrom: number, rookTo: number;
+			if (to > from) {
+				rookFrom = (us === Color.WHITE ? 0 : 56) + 7;
+				rookTo = to - 1;
+			} else {
+				rookFrom = (us === Color.WHITE ? 0 : 56);
+				rookTo = to + 1;
+			}
+			this.movePiece(rookTo, rookFrom);
+		}
+		// Restore captured piece
+		if (captured !== Piece.NONE) {
+			if (type === 2) {
+				// Restore en passant capture
+				const capSq = us === Color.WHITE ? to - 8 : to + 8;
+				this.putPiece(capSq, captured);
+			} else {
+				this.putPiece(to, captured);
+			}
+		}
+		this.state = this.state.previous!;
+	}
+	isAttacked(sq: number, byColor: Color): boolean {
+		const occ = this.occupied();
+		if (PAWN_ATTACKS[ 1 - byColor][sq] & this.piecesOfType(byColor, PieceType.PAWN)) return true;
+		if (KNIGHT_ATTACKS[sq] & this.piecesOfType(byColor, PieceType.KNIGHT)) return true;
+		if (bishopAttacks(sq, occ) & (this.piecesOfType(byColor, PieceType.BISHOP) |
+					      this.piecesOfType(byColor, PieceType.QUEEN))) return true;
+		if (rookAttacks(sq, occ) & (this.piecesOfType(byColor, PieceType.ROOK) |
+					    this.piecesOfType(byColor, PieceType.QUEEN))) return true;
+		if (KING_ATTACKS[sq] & this.piecesOfType(byColor, PieceType.KING)) return true;
+		return false;
+	}
+	inCheck(): boolean {
+		return this.isAttacked(this.kingSquare(this.sideToMove), 1 - this.sideToMove as Color);
+	}
 }

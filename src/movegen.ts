@@ -65,18 +65,18 @@ function generatePawnMoves(
 	}
 
 	// Captures
-	let captL = forwardLeft(pawns) & enemies;
-	let captR = forwardRight(pawns) & enemies;
+	let captL = forwardLeft(normalPawns) & enemies;
+	let captR = forwardRight(normalPawns) & enemies;
 	bb = { value: captL };
 	while (bb.value !== 0n) {
 		const to = popLsb(bb);
-		const fromOffset = us === Color.WHITE ? -7 : 7;
+		const fromOffset = us === Color.WHITE ? -7 : 9;
 		moves.push(makeMove(to + fromOffset, to));
 	}
 	bb = { value: captR };
 	while (bb.value !== 0n) {
 		const to = popLsb(bb);
-		const fromOffset = us === Color.WHITE ? -9 : 9;
+		const fromOffset = us === Color.WHITE ? -9 : 7;
 		moves.push(makeMove(to + fromOffset, to));
 	}
 
@@ -96,8 +96,8 @@ function generatePawnMoves(
 			}
 		};
 		addPromos(promoForward, backDir);
-		addPromos(promoL, us === Color.WHITE ? -7 : 7);
-		addPromos(promoR, us === Color.WHITE ? -9 : 9);
+		addPromos(promoL, us === Color.WHITE ? -7 : 9);
+		addPromos(promoR, us === Color.WHITE ? -9 : 7);
 	}
 
 	// En passant
@@ -202,14 +202,43 @@ export function moveToUCI(m: Move): string {
 	return s;
 }
 
+
+export function generateLegalMoves(pos: Position): Move[] {
+	const pseudoLegal = generatePseudoLegalMoves(pos);
+	const legal: Move[] = [];
+	for (const move of pseudoLegal) {
+		pos.doMove(move);
+		const us = 1 - pos.sideToMove as Color;
+		if (!pos.isAttacked(pos.kingSquare(us), pos.sideToMove as Color)) {
+			legal.push(move);
+		}
+		pos.undoMove(move);
+	}
+	return legal.filter(m => {
+		const type = (m >> 12) & 0b11;
+		if (type !== 3) return true; // Not castling
+		const from = m & 0b111111;
+		const to = (m >> 6) & 0b111111;
+		const them = 1 - pos.sideToMove;
+		const step = to > from ? 1 : -1;
+		if (pos.isAttacked(from, them)) return false;
+		if (pos.isAttacked(from + step, them)) return false;
+		return true;
+	});
+}
+
+
 export function perft(pos: Position, depth: number): number {
 	if (depth === 0) return 1;
-	const moves = generatePseudoLegalMoves(pos);
-	let nodes = 0;
+	const moves = generateLegalMoves(pos);
+	if (depth === 1) return moves.length;
+	let nodes = 0
 	for (const move of moves) {
-		if (depth === 1) {
-			nodes++;
-		}
+		pos.doMove(move);
+		nodes += perft(pos, depth - 1);
+		pos.undoMove(move);
 	}
 	return nodes;
 }
+
+
